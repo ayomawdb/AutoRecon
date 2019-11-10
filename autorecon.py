@@ -7,21 +7,34 @@
 #    option) any later version.
 #
 
+import atexit
 import argparse
 import asyncio
+import colorama
 from colorama import Fore, Style
 from concurrent.futures import ProcessPoolExecutor, as_completed, FIRST_COMPLETED
+from datetime import datetime
 import ipaddress
 import os
 import re
 import socket
 import string
 import sys
+import time
 import toml
+import termios
+
+def _quit():
+    termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, TERM_FLAGS)
+
+atexit.register(_quit)
+
+TERM_FLAGS = termios.tcgetattr(sys.stdin.fileno())
 
 verbose = 0
 nmap = '-vv --reason -Pn'
 srvname = ''
+heartbeat_interval = 60
 port_scan_profile = None
 
 port_scan_profiles_config = None
@@ -31,7 +44,10 @@ global_patterns = []
 username_wordlist = '/usr/share/seclists/Usernames/top-usernames-shortlist.txt'
 password_wordlist = '/usr/share/seclists/Passwords/darkweb2017-top100.txt'
 
-rootdir = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
+rootdir = os.path.dirname(os.path.realpath(__file__))
+
+single_target = False
+only_scans_dir = False
 
 def e(*args, frame_index=1, **kvargs):
     frame = sys._getframe(frame_index)
@@ -103,6 +119,32 @@ def error(*args, sep=' ', end='\n', file=sys.stderr, **kvargs):
 def fail(*args, sep=' ', end='\n', file=sys.stderr, **kvargs):
     cprint(*args, color=Fore.RED, char='!', sep=sep, end=end, file=file, frame_index=2, **kvargs)
     exit(-1)
+
+def calculate_elapsed_time(start_time):
+    elapsed_seconds = round(time.time() - start_time)
+
+    m, s = divmod(elapsed_seconds, 60)
+    h, m = divmod(m, 60)
+
+    elapsed_time = []
+    if h == 1:
+        elapsed_time.append(str(h) + ' hour')
+    elif h > 1:
+        elapsed_time.append(str(h) + ' hours')
+
+    if m == 1:
+        elapsed_time.append(str(m) + ' minute')
+    elif m > 1:
+        elapsed_time.append(str(m) + ' minutes')
+
+    if s == 1:
+        elapsed_time.append(str(s) + ' second')
+    elif s > 1:
+        elapsed_time.append(str(s) + ' seconds')
+    else:
+        elapsed_time.append('less than a second')
+
+    return ', '.join(elapsed_time)
 
 port_scan_profiles_config_file = 'port-scan-profiles.toml'
 with open(os.path.join(rootdir, 'config', port_scan_profiles_config_file), 'r') as p:
@@ -194,7 +236,10 @@ async def run_cmd(semaphore, cmd, target, tag='?', patterns=[]):
             with open(os.path.join(scandir, '_commands.log'), 'a') as file:
                 file.writelines(e('{cmd}\n\n'))
 
+        start_time = time.time()
         process = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, executable='/bin/bash')
+        async with target.lock:
+            target.running_tasks.append(tag)
 
         await asyncio.wait([
             read_stream(process.stdout, target, tag=tag, patterns=patterns),
@@ -202,6 +247,9 @@ async def run_cmd(semaphore, cmd, target, tag='?', patterns=[]):
         ])
 
         await process.wait()
+        async with target.lock:
+            target.running_tasks.remove(tag)
+        elapsed_time = calculate_elapsed_time(start_time)
 
     if process.returncode != 0:
         error('Task {bred}{tag}{rst} on {byellow}{address}{rst} returned non-zero exit code: {process.returncode}')
@@ -209,7 +257,7 @@ async def run_cmd(semaphore, cmd, target, tag='?', patterns=[]):
             with open(os.path.join(scandir, '_errors.log'), 'a') as file:
                 file.writelines(e('[*] Task {tag} returned non-zero exit code: {process.returncode}. Command: {cmd}\n'))
     else:
-        info('Task {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully')
+        info('Task {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully in {elapsed_time}')
 
     return {'returncode': process.returncode, 'name': 'run_cmd'}
 
@@ -302,7 +350,10 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
                 with open(os.path.join(scandir, '_commands.log'), 'a') as file:
                     file.writelines(e('{command}\n\n'))
 
+            start_time = time.time()
             process = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, executable='/bin/bash')
+            async with target.lock:
+                target.running_tasks.append(tag)
 
             output = [
                 parse_port_scan(process.stdout, tag, target, pattern),
@@ -312,6 +363,9 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
             results = await asyncio.gather(*output)
 
             await process.wait()
+            async with target.lock:
+                target.running_tasks.remove(tag)
+            elapsed_time = calculate_elapsed_time(start_time)
 
             if process.returncode != 0:
                 error('Port scan {bred}{tag}{rst} on {byellow}{address}{rst} returned non-zero exit code: {process.returncode}')
@@ -320,7 +374,7 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
                         file.writelines(e('[*] Port scan {tag} returned non-zero exit code: {process.returncode}. Command: {command}\n'))
                 return {'returncode': process.returncode}
             else:
-                info('Port scan {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully')
+                info('Port scan {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully in {elapsed_time}')
 
             ports = results[0]
             if len(ports) == 0:
@@ -337,7 +391,10 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
             with open(os.path.join(scandir, '_commands.log'), 'a') as file:
                 file.writelines(e('{command}\n\n'))
 
+        start_time = time.time()
         process = await asyncio.create_subprocess_shell(command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, executable='/bin/bash')
+        async with target.lock:
+            target.running_tasks.append(tag)
 
         output = [
             parse_service_detection(process.stdout, tag, target, pattern),
@@ -347,6 +404,9 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
         results = await asyncio.gather(*output)
 
         await process.wait()
+        async with target.lock:
+            target.running_tasks.remove(tag)
+        elapsed_time = calculate_elapsed_time(start_time)
 
         if process.returncode != 0:
             error('Service detection {bred}{tag}{rst} on {byellow}{address}{rst} returned non-zero exit code: {process.returncode}')
@@ -354,16 +414,36 @@ async def run_portscan(semaphore, tag, target, service_detection, port_scan=None
                 with open(os.path.join(scandir, '_errors.log'), 'a') as file:
                     file.writelines(e('[*] Service detection {tag} returned non-zero exit code: {process.returncode}. Command: {command}\n'))
         else:
-            info('Service detection {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully')
+            info('Service detection {bgreen}{tag}{rst} on {byellow}{address}{rst} finished successfully in {elapsed_time}')
 
         services = results[0]
 
         return {'returncode': process.returncode, 'name': 'run_portscan', 'services': services}
 
+async def start_heartbeat(target, period=60):
+    while True:
+        await asyncio.sleep(period)
+        async with target.lock:
+            tasks = target.running_tasks
+            count = len(tasks)
+
+            tasks_list = ''
+            if verbose >= 1:
+                tasks_list = ': {bgreen}' + ', '.join(tasks) + '{rst}'
+
+            current_time = datetime.now().strftime('%H:%M:%S')
+
+            if count > 1:
+                info('{bgreen}[{current_time}]{rst} - There are {byellow}{count}{rst} tasks still running on {byellow}{target.address}{rst}' + tasks_list)
+            elif count == 1:
+                info('{bgreen}[{current_time}]{rst} - There is {byellow}1{rst} task still running on {byellow}{target.address}{rst}' + tasks_list)
+
 async def scan_services(loop, semaphore, target):
     address = target.address
     scandir = target.scandir
     pending = []
+
+    heartbeat = loop.create_task(start_heartbeat(target, period=heartbeat_interval))
 
     for profile in port_scan_profiles_config:
         if profile == port_scan_profile:
@@ -380,6 +460,7 @@ async def scan_services(loop, semaphore, target):
 
     while True:
         if not pending:
+            heartbeat.cancel()
             break
 
         done, pending = await asyncio.wait(pending, return_when=FIRST_COMPLETED)
@@ -401,8 +482,9 @@ async def scan_services(loop, semaphore, target):
 
                         info('Found {bmagenta}{service}{rst} on {bmagenta}{protocol}/{port}{rst} on target {byellow}{address}{rst}')
 
-                        with open(os.path.join(target.reportdir, 'notes.txt'), 'a') as file:
-                            file.writelines(e('[*] {service} found on {protocol}/{port}.\n\n\n\n'))
+                        if not only_scans_dir:
+                            with open(os.path.join(target.reportdir, 'notes.txt'), 'a') as file:
+                                file.writelines(e('[*] {service} found on {protocol}/{port}.\n\n\n\n'))
 
                         if protocol == 'udp':
                             nmap_extra = nmap + " -sU"
@@ -514,33 +596,38 @@ async def scan_services(loop, semaphore, target):
                                             pending.add(asyncio.ensure_future(run_cmd(semaphore, e(command), target, tag=tag, patterns=patterns)))
 
 def scan_host(target, concurrent_scans):
+    start_time = time.time()
     info('Scanning target {byellow}{target.address}{rst}')
 
-    basedir = os.path.abspath(os.path.join(outdir, target.address + srvname))
+    if single_target:
+        basedir = os.path.abspath(outdir)
+    else:
+        basedir = os.path.abspath(os.path.join(outdir, target.address + srvname))
     target.basedir = basedir
     os.makedirs(basedir, exist_ok=True)
 
-    exploitdir = os.path.abspath(os.path.join(basedir, 'exploit'))
-    os.makedirs(exploitdir, exist_ok=True)
+    if not only_scans_dir:
+        exploitdir = os.path.abspath(os.path.join(basedir, 'exploit'))
+        os.makedirs(exploitdir, exist_ok=True)
 
-    lootdir = os.path.abspath(os.path.join(basedir, 'loot'))
-    os.makedirs(lootdir, exist_ok=True)
+        lootdir = os.path.abspath(os.path.join(basedir, 'loot'))
+        os.makedirs(lootdir, exist_ok=True)
 
-    reportdir = os.path.abspath(os.path.join(basedir, 'report'))
-    target.reportdir = reportdir
-    os.makedirs(reportdir, exist_ok=True)
+        reportdir = os.path.abspath(os.path.join(basedir, 'report'))
+        target.reportdir = reportdir
+        os.makedirs(reportdir, exist_ok=True)
 
-    screenshotdir = os.path.abspath(os.path.join(reportdir, 'screenshots'))
-    os.makedirs(screenshotdir, exist_ok=True)
+        open(os.path.abspath(os.path.join(reportdir, 'local.txt')), 'a').close()
+        open(os.path.abspath(os.path.join(reportdir, 'proof.txt')), 'a').close()
+
+        screenshotdir = os.path.abspath(os.path.join(reportdir, 'screenshots'))
+        os.makedirs(screenshotdir, exist_ok=True)
 
     scandir = os.path.abspath(os.path.join(basedir, 'scans'))
     target.scandir = scandir
     os.makedirs(scandir, exist_ok=True)
 
     os.makedirs(os.path.abspath(os.path.join(scandir, 'xml')), exist_ok=True)
-
-    open(os.path.abspath(os.path.join(reportdir, 'local.txt')), 'a').close()
-    open(os.path.abspath(os.path.join(reportdir, 'proof.txt')), 'a').close()
 
     # Use a lock when writing to specific files that may be written to by other asynchronous functions.
     target.lock = asyncio.Lock()
@@ -553,7 +640,8 @@ def scan_host(target, concurrent_scans):
 
     try:
         loop.run_until_complete(scan_services(loop, semaphore, target))
-        info('Finished scanning target {byellow}{target.address}{rst}')
+        elapsed_time = calculate_elapsed_time(start_time)
+        info('Finished scanning target {byellow}{target.address}{rst} in {elapsed_time}')
     except KeyboardInterrupt:
         sys.exit(1)
 
@@ -565,22 +653,30 @@ class Target:
         self.scandir = ''
         self.scans = []
         self.lock = None
+        self.running_tasks = []
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Network reconnaissance tool to port scan and automatically enumerate services found on multiple targets.')
-    parser.add_argument('targets', action='store', help='IP addresses (e.g. 10.0.0.1), CIDR notation (e.g. 10.0.0.1/24), or resolvable hostnames (e.g. foo.bar) to scan.', nargs="+")
+    parser.add_argument('targets', action='store', help='IP addresses (e.g. 10.0.0.1), CIDR notation (e.g. 10.0.0.1/24), or resolvable hostnames (e.g. foo.bar) to scan.', nargs="*")
+    parser.add_argument('-t', '--targets', action='store', type=str, default='', dest='target_file', help='Read targets from file.')
     parser.add_argument('-ct', '--concurrent-targets', action='store', metavar='<number>', type=int, default=5, help='The maximum number of target hosts to scan concurrently. Default: %(default)s')
     parser.add_argument('-cs', '--concurrent-scans', action='store', metavar='<number>', type=int, default=10, help='The maximum number of scans to perform per target host. Default: %(default)s')
-    parser.add_argument('--profile', action='store', default='default', help='The port scanning profile to use (defined in port-scan-profiles.toml). Default: %(default)s')
-    parser.add_argument('-o', '--output', action='store', default='results', help='The output directory for results. Default: %(default)s')
+    parser.add_argument('--profile', action='store', default='default', dest='profile_name', help='The port scanning profile to use (defined in port-scan-profiles.toml). Default: %(default)s')
+    parser.add_argument('-o', '--output', action='store', default='results', dest='output_dir', help='The output directory for results. Default: %(default)s')
+    parser.add_argument('--single-target', action='store_true', default=False, help='Only scan a single target. A directory named after the target will not be created. Instead, the directory structure will be created within the output directory. Default: false')
+    parser.add_argument('--only-scans-dir', action='store_true', default=False, help='Only create the "scans" directory for results. Other directories (e.g. exploit, loot, report) will not be created. Default: false')
+    parser.add_argument('--heartbeat', action='store', type=int, default=60, help='Specifies the heartbeat interval (in seconds) for task status messages. Default: %(default)s')
     nmap_group = parser.add_mutually_exclusive_group()
     nmap_group.add_argument('--nmap', action='store', default='-vv --reason -Pn', help='Override the {nmap_extra} variable in scans. Default: %(default)s')
     nmap_group.add_argument('--nmap-append', action='store', default='', help='Append to the default {nmap_extra} variable in scans.')
     parser.add_argument('-v', '--verbose', action='count', default=0, help='Enable verbose output. Repeat for more verbosity.')
-    parser.add_argument('--disable-sanity-checks', action='store_true', default=False, help='Disable sanity checks that would otherwise prevent the scans from running.')
+    parser.add_argument('--disable-sanity-checks', action='store_true', default=False, help='Disable sanity checks that would otherwise prevent the scans from running. Default: false')
     parser.error = lambda s: fail(s[0].upper() + s[1:])
     args = parser.parse_args()
+
+    single_target = args.single_target
+    only_scans_dir = args.only_scans_dir
 
     errors = False
 
@@ -594,7 +690,7 @@ if __name__ == '__main__':
         error('Argument -ct/--concurrent-scans: must be at least 1.')
         errors = True
 
-    port_scan_profile = args.profile
+    port_scan_profile = args.profile_name
 
     found_scan_profile = False
     for profile in port_scan_profiles_config:
@@ -639,21 +735,35 @@ if __name__ == '__main__':
         error('Argument --profile: must reference a port scan profile defined in {port_scan_profiles_config_file}. No such profile found: {port_scan_profile}')
         errors = True
 
+    heartbeat_interval = args.heartbeat
+
     nmap = args.nmap
     if args.nmap_append:
         nmap += " " + args.nmap_append
 
-    outdir = args.output
+    outdir = args.output_dir
     srvname = ''
     verbose = args.verbose
 
-    if len(args.targets) == 0:
-        error('You must specify at least one target to scan!')
-        errors = True
-
+    raw_targets = args.targets
     targets = []
 
-    for target in args.targets:
+    if len(args.target_file) > 0:
+        if not os.path.isfile(args.target_file):
+            error('The target file {args.target_file} was not found.')
+            sys.exit(1)
+        try:
+            with open(args.target_file, 'r') as f:
+                lines = f.read()
+                for line in lines.splitlines():
+                    if line.startswith('#') or len(line) == 0: continue
+                    if line not in raw_targets:
+                        raw_targets.append(line)
+        except OSError:
+            error('The target file {args.target_file} could not be read.')
+            sys.exit(1)
+
+    for target in raw_targets:
         try:
             ip = str(ipaddress.ip_address(target))
 
@@ -682,6 +792,14 @@ if __name__ == '__main__':
                     error(target + ' does not appear to be a valid IP address, IP range, or resolvable hostname.')
                     errors = True
 
+    if len(targets) == 0:
+        error('You must specify at least one target to scan!')
+        errors = True
+
+    if single_target and len(targets) != 1:
+        error('You cannot provide more than one target when scanning in single-target mode.')
+        sys.exit(1)
+
     if not args.disable_sanity_checks and len(targets) > 256:
         error('A total of ' + str(len(targets)) + ' targets would be scanned. If this is correct, re-run with the --disable-sanity-checks option to suppress this check.')
         errors = True
@@ -690,6 +808,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     with ProcessPoolExecutor(max_workers=args.concurrent_targets) as executor:
+        start_time = time.time()
         futures = []
 
         for address in targets:
@@ -705,4 +824,5 @@ if __name__ == '__main__':
             executor.shutdown(wait=False)
             sys.exit(1)
 
-        info('{bgreen}Finished scanning all targets!{rst}')
+        elapsed_time = calculate_elapsed_time(start_time)
+        info('{bgreen}Finished scanning all targets in {elapsed_time}!{rst}')
