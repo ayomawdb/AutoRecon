@@ -571,6 +571,12 @@ service-names = [
     command = 'snmpwalk -c public -v 1 {address} 2>&1 | tee "{scandir}/{protocol}_{port}_snmp_snmpwalk.txt"'
     run_once = true
     ports.udp = [161]
+    
+    [[snmp.scan]]
+    name = 'snmpwalk-v2c'
+    command = 'snmpwalk -c public -v2c {address} 2>&1 | tee "{scandir}/{protocol}_{port}_snmp_snmpwalk_v2c.txt"'
+    run_once = true
+    ports.udp = [161]
 
     [[snmp.scan]]
     name = 'snmpwalk-system-processes'
