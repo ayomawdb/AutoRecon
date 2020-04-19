@@ -567,6 +567,12 @@ service-names = [
     ports.udp = [161]
 
     [[snmp.scan]]
+    name = 'snmp-check'
+    command = 'snmp-check {address} 2>&1 | tee "{scandir}/{protocol}_{port}_snmp_snmp_check.txt"'
+    run_once = true
+    ports.udp = [161]
+    
+    [[snmp.scan]]
     name = 'snmpwalk'
     command = 'snmpwalk -c public -v 1 {address} 2>&1 | tee "{scandir}/{protocol}_{port}_snmp_snmpwalk.txt"'
     run_once = true
